@@ -1,0 +1,8 @@
+# NetVuln Scanner — Dépendances
+# Aucune dépendance externe requise pour le fonctionnement de base.
+# L'outil utilise uniquement la bibliothèque standard Python.
+
+# Optionnel : pour des fonctionnalités avancées
+# scapy>=2.5.0        # Pour les scans ARP avancés
+# python-nmap>=0.7.1  # Interface Python pour Nmap
+# requests>=2.31.0    # Pour la vérification de CVE en ligne
