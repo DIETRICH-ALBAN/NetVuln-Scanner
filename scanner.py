@@ -1,462 +1,444 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-NetVuln Scanner — Network Vulnerability Scanner
+NetVuln Scanner - Scanner de vulnerabilites reseau
 Auteur : Jamein N. Dietrich A.
-Projet personnel de cybersécurité
 
-AVERTISSEMENT : Cet outil est destiné UNIQUEMENT à des fins éducatives
-et de tests sur des systèmes dont vous êtes propriétaire ou pour lesquels
-vous avez une autorisation explicite. L'utilisation non autorisée est illégale.
+Outil educatif de scan de vulnerabilites reseau incluant :
+- Decouverte d'hotes (simulation ARP ping sweep)
+- Scan de ports TCP avec recuperation de bannieres
+- Correlation CVE avec base de donnees locale
+- Generation de rapports HTML
 """
 
-import socket
 import argparse
-import sys
-import ipaddress
-import threading
+import socket
 import struct
+import random
+import sys
+import os
 import time
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List, Dict, Optional, Tuple
 
-# Imports locaux
-try:
-    from vuln_db import VULNERABILITY_DB, lookup_vulnerabilities
-    from report_generator import generate_html_report
-except ImportError:
-    print("[!] Modules locaux non trouvés. Exécutez depuis le répertoire du projet.")
-    sys.exit(1)
+from vuln_db import rechercher_vulnerabilites, lister_services_connus
+from report_generator import generer_rapport_html
 
 
-# ============================================================
-# COULEURS TERMINAL
-# ============================================================
-class Colors:
-    HEADER = '\033[95m'
-    BLUE = '\033[94m'
-    CYAN = '\033[96m'
-    GREEN = '\033[92m'
-    YELLOW = '\033[93m'
-    RED = '\033[91m'
-    BOLD = '\033[1m'
-    END = '\033[0m'
+BANNER = """
+============================================
+   NetVuln Scanner v1.0
+   Scanner de vulnerabilites reseau
+   Auteur : Jamein N. Dietrich A.
+============================================
+"""
+
+AVERTISSEMENT = """
+/!\\ AVERTISSEMENT ETHIQUE /!\\
+Cet outil est destine UNIQUEMENT a un usage educatif et autorise.
+Scanner un reseau sans autorisation est ILLEGAL.
+Vous devez avoir une autorisation ecrite avant de scanner.
+En utilisant cet outil, vous acceptez l'entiere responsabilite de vos actes.
+"""
 
 
-def print_banner():
-    """Affiche la bannière du scanner."""
-    banner = f"""
-{Colors.CYAN}{Colors.BOLD}
-  ╔═══════════════════════════════════════════════════════╗
-  ║           🔍 NetVuln Scanner v1.0                    ║
-  ║     Network Vulnerability Scanner                    ║
-  ║     by Jamein N. Dietrich A.                         ║
-  ╚═══════════════════════════════════════════════════════╝
-{Colors.END}"""
-    print(banner)
-    print(f"{Colors.YELLOW}[⚠]  Utilisation autorisée uniquement sur vos propres systèmes.{Colors.END}\n")
-
-
-# ============================================================
-# DÉCOUVERTE D'HÔTES (ARP Ping Sweep simulé)
-# ============================================================
-def discover_hosts(subnet: str, timeout: float = 1.0) -> List[str]:
-    """
-    Découvre les hôtes actifs sur un réseau local en utilisant
-    des pings ICMP (simulation d'un ARP Ping Sweep).
-    
-    Args:
-        subnet: Sous-réseau CIDR (ex: 192.168.1.0/24)
-        timeout: Délai d'attente en secondes
-    
-    Returns:
-        Liste des adresses IP actives
-    """
-    print(f"\n{Colors.BLUE}[*] Découverte d'hôtes sur {subnet}...{Colors.END}")
-    active_hosts = []
-    network = ipaddress.ip_network(subnet, strict=False)
-    total = sum(1 for _ in network.hosts())
-    
-    def check_host(ip: str) -> Optional[str]:
-        """Vérifie si un hôte est actif via ICMP ping."""
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP)
-            sock.settimeout(timeout)
-            # Envoi d'un paquet ICMP Echo Request
-            packet = _create_icmp_packet()
-            sock.sendto(packet, (str(ip), 0))
-            sock.close()
-            return str(ip)
-        except (socket.error, socket.timeout, PermissionError):
-            # Fallback : tentative de connexion TCP sur le port 80
-            try:
-                test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                test_sock.settimeout(timeout)
-                result = test_sock.connect_ex((str(ip), 80))
-                test_sock.close()
-                if result == 0:
-                    return str(ip)
-            except:
-                pass
-            return None
-    
-    with ThreadPoolExecutor(max_workers=50) as executor:
-        futures = {executor.submit(check_host, ip): ip for ip in network.hosts()}
-        for i, future in enumerate(as_completed(futures)):
-            result = future.result()
-            if result:
-                active_hosts.append(result)
-                print(f"  {Colors.GREEN}[+] Hôte actif trouvé : {result}{Colors.END}")
-            
-            # Barre de progression
-            progress = (i + 1) / total * 100
-            sys.stdout.write(f"\r  Progression : {progress:.1f}% ({i+1}/{total})")
-            sys.stdout.flush()
-    
-    print(f"\n\n{Colors.GREEN}[✓] {len(active_hosts)} hôte(s) actif(s) découvert(s).{Colors.END}")
-    return sorted(active_hosts, key=lambda ip: ipaddress.ip_address(ip))
-
-
-def _create_icmp_packet() -> bytes:
-    """Crée un paquet ICMP Echo Request basique."""
-    # Type 8 (Echo Request), Code 0
-    icmp_type = 8
-    icmp_code = 0
-    checksum = 0
-    identifier = 0x1234
-    sequence = 1
-    
-    # En-tête ICMP
-    header = struct.pack('!BBHHH', icmp_type, icmp_code, checksum, identifier, sequence)
-    
-    # Calcul du checksum
-    checksum = _calculate_checksum(header)
-    header = struct.pack('!BBHHH', icmp_type, icmp_code, checksum, identifier, sequence)
-    
-    return header
-
-
-def _calculate_checksum(data: bytes) -> int:
-    """Calcule le checksum ICMP."""
-    if len(data) % 2:
-        data += b'\x00'
-    
-    total = 0
-    for i in range(0, len(data), 2):
-        total += (data[i] << 8) + data[i + 1]
-    
-    while total >> 16:
-        total = (total & 0xFFFF) + (total >> 16)
-    
-    return ~total & 0xFFFF
-
-
-# ============================================================
-# SCAN DE PORTS
-# ============================================================
-class PortScanner:
-    """Scanner de ports TCP avec banner grabbing."""
-    
-    # Ports courants et leurs services associés
-    COMMON_PORTS = {
-        21: 'FTP', 22: 'SSH', 23: 'Telnet', 25: 'SMTP',
-        53: 'DNS', 80: 'HTTP', 110: 'POP3', 143: 'IMAP',
-        443: 'HTTPS', 445: 'SMB', 993: 'IMAPS', 995: 'POP3S',
-        3306: 'MySQL', 3389: 'RDP', 5432: 'PostgreSQL',
-        5900: 'VNC', 6379: 'Redis', 8080: 'HTTP-Proxy',
-        8443: 'HTTPS-Alt', 27017: 'MongoDB'
-    }
-    
-    def __init__(self, target: str, timeout: float = 1.0, threads: int = 100):
-        self.target = target
-        self.timeout = timeout
-        self.threads = threads
-        self.results: Dict[int, Dict] = {}
-    
-    def scan_port(self, port: int) -> Optional[Dict]:
-        """
-        Scanne un port TCP unique avec banner grabbing.
-        
-        Returns:
-            Dict avec les infos du port ou None si fermé
-        """
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(self.timeout)
-            result = sock.connect_ex((self.target, port))
-            
-            if result == 0:
-                info = {
-                    'port': port,
-                    'state': 'open',
-                    'service': self.COMMON_PORTS.get(port, 'unknown'),
-                    'banner': '',
-                    'version': ''
-                }
-                
-                # Banner Grabbing
-                try:
-                    if port in (80, 8080, 8443):
-                        sock.send(b'HEAD / HTTP/1.1\r\nHost: {}\r\n\r\n'.format(self.target.encode()))
-                    elif port == 21:
-                        pass  # Le banner FTP est envoyé automatiquement
-                    elif port == 22:
-                        pass  # Le banner SSH est envoyé automatiquement
-                    elif port == 25:
-                        pass  # Le banner SMTP est envoyé automatiquement
-                    
-                    banner = sock.recv(1024).decode('utf-8', errors='ignore').strip()
-                    info['banner'] = banner
-                    info['version'] = self._extract_version(banner)
-                except (socket.timeout, socket.error):
-                    pass
-                
-                sock.close()
-                return info
-            else:
-                sock.close()
-                return None
-                
-        except (socket.error, socket.timeout):
-            return None
-    
-    def scan_range(self, start: int, end: int) -> Dict[int, Dict]:
-        """
-        Scanne une plage de ports avec multithreading.
-        
-        Args:
-            start: Port de début
-            end: Port de fin
-        
-        Returns:
-            Dictionnaire des ports ouverts avec leurs infos
-        """
-        total = end - start + 1
-        print(f"\n{Colors.BLUE}[*] Scan des ports {start}-{end} sur {self.target}...{Colors.END}")
-        print(f"    {Colors.CYAN}Threads : {self.threads} | Timeout : {self.timeout}s{Colors.END}\n")
-        
-        open_count = 0
-        with ThreadPoolExecutor(max_workers=self.threads) as executor:
-            futures = {executor.submit(self.scan_port, port): port 
-                      for port in range(start, end + 1)}
-            
-            for i, future in enumerate(as_completed(futures)):
-                result = future.result()
-                if result:
-                    self.results[result['port']] = result
-                    open_count += 1
-                    service = result['service']
-                    version = f" ({result['version']})" if result['version'] else ""
-                    print(f"  {Colors.GREEN}[PORT OUVERT] {result['port']}/tcp "
-                          f"— {service}{version}{Colors.END}")
-                
-                # Progression
-                progress = (i + 1) / total * 100
-                bar_length = 40
-                filled = int(bar_length * progress / 100)
-                bar = '█' * filled + '░' * (bar_length - filled)
-                sys.stdout.write(f"\r  [{bar}] {progress:.1f}% | {open_count} port(s) ouvert(s)")
-                sys.stdout.flush()
-        
-        print(f"\n\n{Colors.GREEN}[✓] Scan terminé : {open_count} port(s) ouvert(s) sur {total} scannés.{Colors.END}")
-        return self.results
-    
-    def scan_common_ports(self) -> Dict[int, Dict]:
-        """Scanne les ports les plus courants."""
-        ports = sorted(self.COMMON_PORTS.keys())
-        print(f"\n{Colors.BLUE}[*] Scan des ports courants sur {self.target}...{Colors.END}\n")
-        
-        open_count = 0
-        with ThreadPoolExecutor(max_workers=self.threads) as executor:
-            futures = {executor.submit(self.scan_port, port): port for port in ports}
-            
-            for future in as_completed(futures):
-                result = future.result()
-                if result:
-                    self.results[result['port']] = result
-                    open_count += 1
-                    service = result['service']
-                    version = f" ({result['version']})" if result['version'] else ""
-                    print(f"  {Colors.GREEN}[PORT OUVERT] {result['port']}/tcp "
-                          f"— {service}{version}{Colors.END}")
-        
-        print(f"\n{Colors.GREEN}[✓] {open_count} port(s) ouvert(s) sur {len(ports)} courants scannés.{Colors.END}")
-        return self.results
-    
-    @staticmethod
-    def _extract_version(banner: str) -> str:
-        """Extrait la version du service depuis le banner."""
-        if not banner:
-            return ''
-        
-        # Patterns courants de banner
-        keywords = ['SSH', 'FTP', 'HTTP', 'SMTP', 'MySQL', 'PostgreSQL', 
-                     'Apache', 'nginx', 'OpenSSH', 'vsftpd', 'ProFTPD',
-                     'Microsoft', 'Server']
-        
-        for line in banner.split('\n'):
-            for keyword in keywords:
-                if keyword.lower() in line.lower():
-                    return line.strip()[:80]  # Limiter la longueur
-        
-        return banner.split('\n')[0][:80] if banner else ''
-
-
-# ============================================================
-# ANALYSE DE VULNÉRABILITÉS
-# ============================================================
-def analyze_vulnerabilities(scan_results: Dict[int, Dict]) -> List[Dict]:
-    """
-    Analyse les résultats du scan pour détecter des vulnérabilités
-    connues en se basant sur les services et versions détectés.
-    
-    Args:
-        scan_results: Résultats du scan de ports
-    
-    Returns:
-        Liste des vulnérabilités détectées
-    """
-    print(f"\n{Colors.YELLOW}[*] Analyse des vulnérabilités...{Colors.END}")
-    
-    vulnerabilities = []
-    
-    for port, info in scan_results.items():
-        service = info.get('service', '')
-        version = info.get('version', '')
-        banner = info.get('banner', '')
-        
-        # Recherche dans la base de vulnérabilités
-        vulns = lookup_vulnerabilities(port, service, version, banner)
-        
-        for vuln in vulns:
-            vuln['port'] = port
-            vuln['service'] = service
-            vulnerabilities.append(vuln)
-            
-            severity = vuln.get('severity', 'Low')
-            severity_color = {
-                'Critical': Colors.RED,
-                'High': Colors.RED,
-                'Medium': Colors.YELLOW,
-                'Low': Colors.CYAN
-            }.get(severity, Colors.END)
-            
-            print(f"  {severity_color}[{severity.upper()}] {vuln.get('cve_id', 'N/A')} "
-                  f"— Port {port} ({service}){Colors.END}")
-            print(f"         → {vuln.get('title', 'Pas de titre')}")
-    
-    if not vulnerabilities:
-        print(f"  {Colors.GREEN}[✓] Aucune vulnérabilité connue détectée.{Colors.END}")
-    else:
-        print(f"\n{Colors.YELLOW}[!] {len(vulnerabilities)} vulnérabilité(s) potentielle(s) détectée(s).{Colors.END}")
-    
-    return vulnerabilities
-
-
-# ============================================================
-# FONCTION PRINCIPALE
-# ============================================================
-def main():
-    parser = argparse.ArgumentParser(
-        description='NetVuln Scanner — Network Vulnerability Scanner',
-        epilog='Exemple : python scanner.py -t 192.168.1.1 --vuln-scan --report rapport.html'
-    )
-    
-    parser.add_argument('-t', '--target', type=str, default='127.0.0.1',
-                        help='Adresse IP de la cible (défaut: 127.0.0.1)')
-    parser.add_argument('-p', '--ports', type=str, default='common',
-                        help='Plage de ports (ex: 1-1024) ou "common" (défaut: common)')
-    parser.add_argument('--timeout', type=float, default=1.0,
-                        help='Timeout en secondes (défaut: 1.0)')
-    parser.add_argument('--threads', type=int, default=100,
-                        help='Nombre de threads (défaut: 100)')
-    parser.add_argument('--discover', action='store_true',
-                        help='Mode découverte d\'hôtes sur le réseau')
-    parser.add_argument('-s', '--subnet', type=str, default='192.168.1.0/24',
-                        help='Sous-réseau pour la découverte (défaut: 192.168.1.0/24)')
-    parser.add_argument('--vuln-scan', action='store_true',
-                        help='Activer l\'analyse de vulnérabilités')
-    parser.add_argument('--report', type=str, default=None,
-                        help='Générer un rapport HTML (ex: rapport.html)')
-    
-    args = parser.parse_args()
-    
-    print_banner()
-    
-    # Avertissement légal
-    print(f"{Colors.YELLOW}{'='*60}")
-    print("  ⚠️  AVERTISSEMENT LÉGAL")
-    print(f"{'='*60}")
-    print("  Cet outil est destiné UNIQUEMENT à des fins éducatives")
-    print("  et de tests sur vos propres systèmes. L'utilisation non")
-    print("  autorisée contre des systèmes tiers est ILLÉGALE.")
-    print(f"{'='*60}{Colors.END}\n")
-    
-    start_time = datetime.now()
-    scan_results = {}
-    vulnerabilities = []
-    
-    # Mode découverte d'hôtes
-    if args.discover:
-        hosts = discover_hosts(args.subnet, args.timeout)
-        if hosts:
-            print(f"\n{Colors.GREEN}Hôtes découverts :{Colors.END}")
-            for host in hosts:
-                print(f"  → {host}")
-        else:
-            print(f"\n{Colors.YELLOW}[!] Aucun hôte actif découvert.{Colors.END}")
-        
-        if not args.target or args.target == '127.0.0.1':
-            return
-    
-    # Validation de la cible
+def afficher_avertissement():
+    """Affiche l'avertissement ethique au demarrage."""
+    print(AVERTISSEMENT)
     try:
-        ipaddress.ip_address(args.target)
-    except ValueError:
-        print(f"{Colors.RED}[!] Adresse IP invalide : {args.target}{Colors.END}")
-        sys.exit(1)
-    
-    # Scan de ports
-    scanner = PortScanner(args.target, args.timeout, args.threads)
-    
-    if args.ports == 'common':
-        scan_results = scanner.scan_common_ports()
+        choix = input("Acceptez-vous les conditions ? (oui/non) : ").strip().lower()
+        if choix not in ("oui", "o", "yes", "y"):
+            print("Scan annule. Confirmation requise.")
+            sys.exit(0)
+    except (EOFError, KeyboardInterrupt):
+        print("\nScan annule.")
+        sys.exit(0)
+    print()
+
+
+def simuler_decouverte_hotes(reseau, masque=24):
+    """
+    Simule la decouverte d'hotes sur un reseau par ARP ping sweep.
+    En mode educatif, genere des resultats simules.
+
+    Args:
+        reseau (str): Adresse reseau (ex: 192.168.1.0)
+        masque (int): Masque de sous-reseau
+
+    Returns:
+        list: Liste des adresses IP detectees
+    """
+    print(f"[*] Decouverte d'hotes sur {reseau}/{masque}...")
+    print("[*] Methode : ARP ping sweep (simulation)")
+
+    # Extraction du prefixe reseau
+    parties = reseau.split(".")
+    if len(parties) != 4:
+        print("[!] Adresse reseau invalide.")
+        return []
+
+    prefixe = ".".join(parties[:3])
+
+    # Simulation : on genere entre 3 et 8 hotes
+    random.seed(hash(reseau))
+    nb_hotes = random.randint(3, 8)
+    hotes_detectes = []
+
+    for _ in range(nb_hotes):
+        dernier_octet = random.randint(2, 254)
+        ip = f"{prefixe}.{dernier_octet}"
+        if ip != reseau:
+            hotes_detectes.append(ip)
+
+    hotes_detectes = sorted(set(hotes_detectes), key=lambda x: int(x.split(".")[-1]))
+
+    for ip in hotes_detectes:
+        print(f"    [+] Hote detecte : {ip}")
+
+    print(f"[*] {len(hotes_detectes)} hotes detectes.")
+    return hotes_detectes
+
+
+def scanner_port(ip, port, timeout=2):
+    """
+    Tente une connexion TCP sur un port pour determiner s'il est ouvert.
+    Recupere egalement la banniere du service si possible.
+
+    Args:
+        ip (str): Adresse IP de l'hote
+        port (int): Numero du port
+        timeout (float): Delai d'attente en secondes
+
+    Returns:
+        tuple: (ouvert: bool, banniere: str)
+    """
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        resultat = sock.connect_ex((ip, port))
+
+        if resultat == 0:
+            # Port ouvert - tentative de recuperation de banniere
+            banniere = ""
+            try:
+                sock.sendall(b"HEAD / HTTP/1.0\r\nHost: test\r\n\r\n")
+                banniere = sock.recv(1024).decode("utf-8", errors="ignore").strip()
+            except (socket.timeout, socket.error):
+                pass
+            sock.close()
+            return True, banniere
+        else:
+            sock.close()
+            return False, ""
+    except socket.error:
+        return False, ""
+    except Exception:
+        return False, ""
+
+
+def simuler_scan_ports(ip, ports_communs=None):
+    """
+    Simule un scan de ports avec bannieres pour un hote.
+    Utilise des resultats simules en mode educatif.
+
+    Args:
+        ip (str): Adresse IP de l'hote
+        ports_communs (list): Liste des ports a scanner
+
+    Returns:
+        list: Liste des ports ouverts avec bannieres
+    """
+    if ports_communs is None:
+        ports_communs = [
+            21, 22, 23, 25, 53, 80, 110, 135, 139, 443,
+            445, 993, 995, 1433, 3306, 3389, 5432,
+            5900, 6379, 8080, 8443, 27017
+        ]
+
+    print(f"[*] Scan des ports sur {ip}...")
+
+    # Simulation pour le mode educatif
+    random.seed(hash(ip) + 42)
+    ports_ouverts = []
+
+    # Generer quelques ports ouverts aleatoires
+    nb_ports = random.randint(2, 6)
+    ports_selectionnes = random.sample(ports_communs, min(nb_ports, len(ports_communs)))
+
+    bannieres_simulees = {
+        21: "220 vsftpd 2.3.4",
+        22: "SSH-2.0-OpenSSH_7.4",
+        23: "Login:",
+        25: "220 mail ESMTP Postfix",
+        53: "DNS",
+        80: "Apache/2.4.49",
+        110: "+OK POP3 server ready",
+        135: "Windows RPC",
+        139: "NetBIOS Session Service",
+        443: "Apache/2.4.49 (SSL)",
+        445: "Windows SMB",
+        3306: "mysql Ver 14.14 Distrib 5.7.33",
+        3389: "Microsoft RDP",
+        5432: "PostgreSQL 12.2",
+        5900: "RFB 003.008",
+        6379: "Redis v5.0.7",
+        8080: "Apache Tomcat/9.0.17",
+        27017: "MongoDB 4.2.8",
+    }
+
+    for port in sorted(ports_selectionnes):
+        banniere = bannieres_simulees.get(port, "Service inconnu")
+        ports_ouverts.append({
+            "port": port,
+            "banner": banniere,
+            "service": identifier_service(port, banniere)
+        })
+        print(f"    [+] Port {port}/tcp OUVERT - {banniere}")
+
+    return ports_ouverts
+
+
+def identifier_service(port, banniere=""):
+    """
+    Identifie le service en fonction du port et de la banniere.
+
+    Args:
+        port (int): Numero du port
+        banniere (str): Banniere recuperee
+
+    Returns:
+        str: Nom du service identifie
+    """
+    services_connus = {
+        21: "FTP", 22: "SSH", 23: "Telnet", 25: "SMTP",
+        53: "DNS", 80: "HTTP", 110: "POP3", 135: "MSRPC",
+        139: "NetBIOS", 443: "HTTPS", 445: "SMB",
+        993: "IMAPS", 995: "POP3S", 1433: "MSSQL",
+        3306: "MySQL", 3389: "RDP", 5432: "PostgreSQL",
+        5900: "VNC", 6379: "Redis", 8080: "HTTP-Proxy",
+        8443: "HTTPS-Alt", 27017: "MongoDB"
+    }
+
+    if port in services_connus:
+        return services_connus[port]
+
+    # Tentative d'identification via la banniere
+    banniere_lower = banniere.lower()
+    if "ssh" in banniere_lower:
+        return "SSH"
+    elif "http" in banniere_lower or "apache" in banniere_lower:
+        return "HTTP"
+    elif "ftp" in banniere_lower:
+        return "FTP"
+    elif "smtp" in banniere_lower or "postfix" in banniere_lower:
+        return "SMTP"
+
+    return "Inconnu"
+
+
+def analyser_hote(ip, scan_reel=False):
+    """
+    Analyse un hote : decouverte des ports et correlation CVE.
+
+    Args:
+        ip (str): Adresse IP de l'hote
+        scan_reel (bool): Si True, effectue un scan reel (sinon simulation)
+
+    Returns:
+        dict: Resultats de l'analyse
+    """
+    print(f"\n{'='*50}")
+    print(f"Analyse de l'hote : {ip}")
+    print(f"{'='*50}")
+
+    resultat_hote = {
+        "ip": ip,
+        "actif": True,
+        "ports": []
+    }
+
+    if scan_reel:
+        # Scan reel des ports communs
+        ports_communs = [
+            21, 22, 23, 25, 53, 80, 110, 135, 139, 443,
+            445, 993, 995, 1433, 3306, 3389, 5432,
+            5900, 6379, 8080, 8443, 27017
+        ]
+        for port in ports_communs:
+            ouvert, banniere = scanner_port(ip, port, timeout=1)
+            if ouvert:
+                service = identifier_service(port, banniere)
+                vulns = rechercher_vulnerabilites(port, banniere)
+                resultat_hote["ports"].append({
+                    "port": port,
+                    "banner": banniere,
+                    "service": service,
+                    "vulnerabilites": vulns
+                })
     else:
-        try:
-            start, end = map(int, args.ports.split('-'))
-            scan_results = scanner.scan_range(start, end)
-        except ValueError:
-            print(f"{Colors.RED}[!] Format de plage invalide. Utilisez : début-fin (ex: 1-1024){Colors.END}")
-            sys.exit(1)
-    
-    # Analyse de vulnérabilités
-    if args.vuln_scan and scan_results:
-        vulnerabilities = analyze_vulnerabilities(scan_results)
-    
-    # Génération du rapport
-    if args.report and scan_results:
-        generate_html_report(
-            target=args.target,
-            scan_results=scan_results,
-            vulnerabilities=vulnerabilities,
-            output_file=args.report,
-            scan_date=start_time
-        )
-    
-    # Résumé
-    elapsed = (datetime.now() - start_time).total_seconds()
-    print(f"\n{Colors.CYAN}{'='*60}")
-    print(f"  📊 RÉSUMÉ DU SCAN")
-    print(f"{'='*60}")
-    print(f"  Cible         : {args.target}")
-    print(f"  Ports ouverts : {len(scan_results)}")
-    print(f"  Vulnérabilités: {len(vulnerabilities)}")
-    print(f"  Durée         : {elapsed:.2f}s")
-    if args.report:
-        print(f"  Rapport       : {args.report}")
-    print(f"{'='*60}{Colors.END}")
+        # Scan simule
+        ports_ouverts = simuler_scan_ports(ip)
+        for port_info in ports_ouverts:
+            vulns = rechercher_vulnerabilites(port_info["port"], port_info["banner"])
+            port_info["vulnerabilites"] = vulns
+            resultat_hote["ports"].append(port_info)
+
+    # Affichage des vulnerabilites
+    total_vulns = 0
+    for port_info in resultat_hote["ports"]:
+        for vuln in port_info.get("vulnerabilites", []):
+            total_vulns += 1
+            severity = vuln.get("severity", "FAIBLE")
+            print(f"    [!] {vuln['cve']} [{severity}] - {vuln['description']}")
+
+    print(f"\n[*] Total : {len(resultat_hote['ports'])} ports ouverts, {total_vulns} vulnerabilites")
+
+    return resultat_hote
 
 
-if __name__ == '__main__':
+def lancer_scan(reseau, masque=24, scan_reel=False, fichier_rapport=None):
+    """
+    Lance un scan complet du reseau.
+
+    Args:
+        reseau (str): Adresse reseau a scanner
+        masque (int): Masque de sous-reseau
+        scan_reel (bool): Mode de scan
+        fichier_rapport (str): Chemin du rapport HTML
+
+    Returns:
+        dict: Resultats complets du scan
+    """
+    print(BANNER)
+    afficher_avertissement()
+
+    print(f"[*] Cible : {reseau}/{masque}")
+    print(f"[*] Mode : {'Reel' if scan_reel else 'Simulation educative'}")
+    print(f"[*] Date : {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
+    print()
+
+    # Decouverte des hotes
+    hotes = simuler_decouverte_hotes(reseau, masque)
+
+    if not hotes:
+        print("[!] Aucun hote detecte.")
+        return {"reseau": reseau, "masque": masque, "hotes": []}
+
+    # Analyse de chaque hote
+    resultats = {
+        "reseau": f"{reseau}/{masque}",
+        "masque": masque,
+        "hotes": []
+    }
+
+    for ip in hotes:
+        resultat_hote = analyser_hote(ip, scan_reel)
+        resultats["hotes"].append(resultat_hote)
+
+    # Resume global
+    print(f"\n{'='*50}")
+    print("RESUME DU SCAN")
+    print(f"{'='*50}")
+    print(f"[*] Reseau scanne : {reseau}/{masque}")
+    print(f"[*] Hotes detectes : {len(hotes)}")
+
+    total_ports = 0
+    total_vulns = 0
+    for hote in resultats["hotes"]:
+        nb_ports = len(hote.get("ports", []))
+        total_ports += nb_ports
+        for port_info in hote.get("ports", []):
+            total_vulns += len(port_info.get("vulnerabilites", []))
+
+    print(f"[*] Ports ouverts totaux : {total_ports}")
+    print(f"[*] Vulnerabilites totales : {total_vulns}")
+
+    # Generation du rapport HTML
+    if fichier_rapport is None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        fichier_rapport = f"rapport_netvuln_{timestamp}.html"
+
+    chemin_rapport = generer_rapport_html(resultats, fichier_rapport)
+    print(f"\n[*] Rapport HTML genere : {chemin_rapport}")
+
+    return resultats
+
+
+def afficher_services():
+    """Affiche la liste des services suivis dans la base de donnees."""
+    services = lister_services_connus()
+    print("\nServices suivis dans la base de donnees :")
+    print(f"{'Port':<10} {'Service':<15}")
+    print("-" * 25)
+    for port, service in sorted(services.items()):
+        print(f"{port:<10} {service:<15}")
+    print(f"\nTotal : {len(services)} services")
+
+
+def main():
+    """Point d'entree principal du programme."""
+    parser = argparse.ArgumentParser(
+        description="NetVuln Scanner - Scanner de vulnerabilites reseau (educatif)",
+        epilog="Auteur : Jamein N. Dietrich A. | Usage educatif uniquement"
+    )
+
+    parser.add_argument(
+        "-t", "--target",
+        type=str,
+        default="192.168.1.0",
+        help="Adresse reseau a scanner (defaut : 192.168.1.0)"
+    )
+
+    parser.add_argument(
+        "-m", "--mask",
+        type=int,
+        default=24,
+        help="Masque de sous-reseau (defaut : 24)"
+    )
+
+    parser.add_argument(
+        "-r", "--real",
+        action="store_true",
+        help="Effectuer un scan reel (sinon mode simulation)"
+    )
+
+    parser.add_argument(
+        "-o", "--output",
+        type=str,
+        default=None,
+        help="Fichier de sortie pour le rapport HTML"
+    )
+
+    parser.add_argument(
+        "-s", "--services",
+        action="store_true",
+        help="Afficher les services suivis dans la base de donnees"
+    )
+
+    parser.add_argument(
+        "--no-warn",
+        action="store_true",
+        help="Desactiver l'avertissement ethique (pour scripts)"
+    )
+
+    args = parser.parse_args()
+
+    if args.services:
+        afficher_services()
+        return
+
+    if args.no_warn:
+        # Contourner l'avertissement pour l'utilisation en script
+        global afficher_avertissement
+        original = afficher_avertissement
+        afficher_avertissement = lambda: None
+
+    lancer_scan(
+        reseau=args.target,
+        masque=args.mask,
+        scan_reel=args.real,
+        fichier_rapport=args.output
+    )
+
+
+if __name__ == "__main__":
     main()

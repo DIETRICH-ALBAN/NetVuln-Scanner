@@ -1,77 +1,81 @@
-# 🔍 NetVuln Scanner — Network Vulnerability Scanner
+# NetVuln Scanner - Scanner de vulnerabilites reseau
 
-> **Auteur** : Jamein N. Dietrich A.  
-> **Contexte** : Projet personnel en cybersécurité — Scan de ports et détection de vulnérabilités réseau
+Auteur : Jamein N. Dietrich A.
+Contexte : Projet personnel en cyberscurite - Scanner de vulnerabilites reseau educatif
 
-## 📋 Description
+## Description
 
-NetVuln Scanner est un outil Python de scan réseau qui permet de :
+NetVuln Scanner est un outil educatif de scan de vulnerabilites reseau. Il permet de decouvrir les hotes sur un reseau, d'identifier les ports ouverts et les services en cours d'execution, puis de correler ces informations avec une base de donnees locale de CVE (Common Vulnerabilities and Exposures) pour identifier les vulnerabilites potentielles.
 
-- **Découvrir les hôtes actifs** sur un réseau local (ARP Ping Sweep)
-- **Scanner les ports ouverts** sur une cible (TCP Connect Scan + SYN-like Scan)
-- **Identifier les services** tournant sur les ports ouverts (banner grabbing)
-- **Détecter les vulnérabilités courantes** en comparant les services détectés à une base de signatures CVE locales
-- **Générer un rapport HTML** détaillé avec les résultats du scan
+Fonctionnalites principales :
+- Decouverte d'hotes par simulation ARP ping sweep
+- Scan de ports TCP avec recuperation de bannieres (banner grabbing)
+- Correlation CVE avec base de donnees locale de vulnerabilites
+- Generation de rapports HTML detailles avec statistiques de severite
+- Mode simulation educative et mode scan reel
+- Interface CLI complete avec argparse
 
-## 🎯 Compétences cybersécurité démontrées
+## Competences cyberscurite demontrees
 
-| Compétence | Mise en œuvre |
-|-----------|---------------|
-| Reconnaissance réseau | ARP sweep, découverte d'hôtes |
-| Scan de ports | TCP Connect, détection de services |
-| Banner Grabbing | Identification des versions de services |
-| Analyse de vulnérabilités | Corrélation avec base CVE locale |
-| Reporting de sécurité | Génération de rapports structurés |
-| Éthique & légalité | Mode localhost par défaut, avertissements |
+| Competence | Description |
+|---|---|
+| Reconnaissance reseau | Decouverte d'hotes et cartographie reseau |
+| Scan de ports | Identification des services exposes |
+| Banner grabbing | Recuperation d'informations sur les versions |
+| Analyse CVE | Correlation avec les vulnerabilites connues |
+| Reporting | Generation de rapports de securite |
+| Ethique | Avertissement et responsabilisation |
 
-## ⚙️ Installation
+## Installation
 
 ```bash
-# Cloner le dépôt
-git clone https://github.com/<votre-username>/netvuln-scanner.git
+git clone <url-du-depot>
 cd netvuln-scanner
-
-# Installer les dépendances
 pip install -r requirements.txt
 ```
 
-## 🚀 Utilisation
+## Utilisation
 
+Scan en mode simulation (par defaut) :
 ```bash
-# Scan de base sur localhost (par défaut)
-python scanner.py
-
-# Scan d'une cible spécifique
-python scanner.py -t 192.168.1.1
-
-# Scan avec plage de ports personnalisée
-python scanner.py -t 192.168.1.1 -p 1-1024
-
-# Scan complet avec détection de vulnérabilités
-python scanner.py -t 192.168.1.1 --vuln-scan
-
-# Découverte d'hôtes sur le réseau local
-python scanner.py --discover -s 192.168.1.0/24
-
-# Générer un rapport HTML
-python scanner.py -t 192.168.1.1 --vuln-scan --report rapport.html
+python3 scanner.py -t 192.168.1.0
 ```
 
-## 📁 Structure du projet
+Scan avec masque personnalise :
+```bash
+python3 scanner.py -t 10.0.0.0 -m 16
+```
+
+Scan reel (requiert des droits et une autorisation) :
+```bash
+python3 scanner.py -t 192.168.1.0 --real
+```
+
+Specifier un fichier de sortie pour le rapport :
+```bash
+python3 scanner.py -t 192.168.1.0 -o rapport.html
+```
+
+Afficher les services suivis :
+```bash
+python3 scanner.py --services
+```
+
+## Structure du projet
 
 ```
 netvuln-scanner/
-├── scanner.py          # Script principal du scanner
-├── vuln_db.py          # Base de données de vulnérabilités locale
-├── report_generator.py # Générateur de rapports HTML
-├── requirements.txt    # Dépendances Python
-└── README.md           # Documentation
+  |-- scanner.py             # Script principal avec CLI
+  |-- vuln_db.py             # Base de donnees locale de vulnerabilites
+  |-- report_generator.py    # Generateur de rapports HTML
+  |-- requirements.txt       # Dependances Python
+  |-- README.md              # Documentation du projet
 ```
 
-## ⚠️ Avertissement éthique
+## Avertissement ethique
 
-Cet outil est conçu à des fins **éducatives et de test uniquement**. Ne l'utilisez que sur des systèmes dont vous êtes le propriétaire ou pour lesquels vous avez une autorisation explicite. L'utilisation non autorisée de cet outil contre des systèmes tiers est illégale.
+Cet outil est strictement destine a un usage educatif. Le scan de reseaux sans autorisation prealable est illgal et passible de sanctions penales. Vous devez toujours obtenir une autorisation ecrite avant de scanner un reseau qui ne vous appartient pas. L'auteur decline toute responsabilite quant a l'utilisation abusive de cet outil.
 
-## 📜 Licence
+## Licence
 
-MIT License — Libre d'utilisation à des fins éducatives.
+MIT License

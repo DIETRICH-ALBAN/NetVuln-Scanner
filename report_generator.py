@@ -1,49 +1,47 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Générateur de rapports HTML pour NetVuln Scanner.
+Generateur de rapports HTML pour NetVuln Scanner
 Auteur : Jamein N. Dietrich A.
 """
 
+import os
 from datetime import datetime
-from typing import Dict, List, Optional
+from vuln_db import obtenir_stats_severite
 
 
-def generate_html_report(
-    target: str,
-    scan_results: Dict[int, Dict],
-    vulnerabilities: List[Dict],
-    output_file: str,
-    scan_date: Optional[datetime] = None
-) -> None:
+def generer_rapport_html(resultats, fichier_sortie="rapport_vuln.html"):
     """
-    Génère un rapport HTML détaillé des résultats du scan.
-    
+    Genere un rapport HTML detaille des resultats du scan.
+
     Args:
-        target: Adresse IP de la cible
-        scan_results: Résultats du scan de ports
-        vulnerabilities: Liste des vulnérabilités détectées
-        output_file: Chemin du fichier de sortie HTML
-        scan_date: Date/heure du scan
+        resultats (dict): Resultats du scan
+        fichier_sortie (str): Chemin du fichier HTML a generer
+
+    Returns:
+        str: Chemin du fichier genere
     """
-    if scan_date is None:
-        scan_date = datetime.now()
-    
-    # Statistiques
-    open_ports = len(scan_results)
-    vuln_count = len(vulnerabilities)
-    severity_stats = {'Critical': 0, 'High': 0, 'Medium': 0, 'Low': 0}
-    for v in vulnerabilities:
-        sev = v.get('severity', 'Low')
-        severity_stats[sev] = severity_stats.get(sev, 0) + 1
-    
-    # Construction du HTML
+    date_str = datetime.now().strftime("%d/%m/%Y a %H:%M:%S")
+
+    # Comptage total des vulnerabilites
+    total_vulns = 0
+    for hote in resultats.get("hotes", []):
+        for port_info in hote.get("ports", []):
+            total_vulns += len(port_info.get("vulnerabilites", []))
+
+    # Calcul des stats globales
+    toutes_vulns = []
+    for hote in resultats.get("hotes", []):
+        for port_info in hote.get("ports", []):
+            toutes_vulns.extend(port_info.get("vulnerabilites", []))
+    stats = obtenir_stats_severite(toutes_vulns)
+
     html = f"""<!DOCTYPE html>
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Rapport NetVuln Scanner — {target}</title>
+    <title>Rapport NetVuln Scanner</title>
     <style>
         * {{
             margin: 0;
@@ -52,277 +50,261 @@ def generate_html_report(
         }}
         body {{
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: #0f172a;
-            color: #e2e8f0;
+            background-color: #0d1117;
+            color: #c9d1d9;
             line-height: 1.6;
         }}
         .container {{
-            max-width: 1000px;
+            max-width: 1200px;
             margin: 0 auto;
             padding: 20px;
         }}
-        .header {{
-            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
-            border: 1px solid #334155;
-            border-radius: 12px;
+        header {{
+            background: linear-gradient(135deg, #1a1f2e 0%, #2d333b 100%);
             padding: 30px;
-            margin-bottom: 20px;
-            text-align: center;
+            border-radius: 10px;
+            margin-bottom: 30px;
+            border: 1px solid #30363d;
         }}
-        .header h1 {{
-            color: #38bdf8;
-            font-size: 28px;
+        header h1 {{
+            color: #58a6ff;
+            font-size: 2em;
             margin-bottom: 10px;
         }}
-        .header .subtitle {{
-            color: #94a3b8;
-            font-size: 14px;
+        header p {{
+            color: #8b949e;
         }}
-        .summary-grid {{
+        .stats-grid {{
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
             gap: 15px;
-            margin-bottom: 20px;
+            margin-bottom: 30px;
         }}
-        .summary-card {{
-            background: #1e293b;
-            border: 1px solid #334155;
-            border-radius: 8px;
+        .stat-card {{
+            background: #161b22;
             padding: 20px;
+            border-radius: 8px;
+            border: 1px solid #30363d;
             text-align: center;
         }}
-        .summary-card .number {{
-            font-size: 36px;
+        .stat-card h3 {{
+            font-size: 0.9em;
+            color: #8b949e;
+            margin-bottom: 10px;
+        }}
+        .stat-card .number {{
+            font-size: 2.5em;
             font-weight: bold;
-            margin-bottom: 5px;
         }}
-        .summary-card .label {{
-            color: #94a3b8;
-            font-size: 13px;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-        }}
-        .critical {{ color: #ef4444; border-left: 4px solid #ef4444; }}
-        .high {{ color: #f97316; border-left: 4px solid #f97316; }}
-        .medium {{ color: #eab308; border-left: 4px solid #eab308; }}
-        .low {{ color: #22c55e; border-left: 4px solid #22c55e; }}
-        .section {{
-            background: #1e293b;
-            border: 1px solid #334155;
+        .critique {{ color: #f85149; }}
+        .elevee {{ color: #d29922; }}
+        .moyenne {{ color: #58a6ff; }}
+        .faible {{ color: #3fb950; }}
+        .info {{ color: #8b949e; }}
+        .host-section {{
+            background: #161b22;
             border-radius: 8px;
-            padding: 25px;
+            border: 1px solid #30363d;
             margin-bottom: 20px;
+            overflow: hidden;
         }}
-        .section h2 {{
-            color: #38bdf8;
-            font-size: 20px;
-            margin-bottom: 15px;
-            padding-bottom: 10px;
-            border-bottom: 1px solid #334155;
+        .host-header {{
+            background: #1c2128;
+            padding: 15px 20px;
+            border-bottom: 1px solid #30363d;
         }}
-        table {{
-            width: 100%;
-            border-collapse: collapse;
+        .host-header h2 {{
+            color: #58a6ff;
         }}
-        th {{
-            background: #0f172a;
-            color: #38bdf8;
-            padding: 12px 15px;
-            text-align: left;
-            font-size: 13px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
+        .port-item {{
+            padding: 15px 20px;
+            border-bottom: 1px solid #21262d;
         }}
-        td {{
-            padding: 10px 15px;
-            border-bottom: 1px solid #334155;
-            font-size: 14px;
+        .port-item:last-child {{
+            border-bottom: none;
         }}
-        tr:hover {{
-            background: #334155;
+        .port-info {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
         }}
-        .badge {{
-            display: inline-block;
+        .port-number {{
+            color: #79c0ff;
+            font-weight: bold;
+            font-size: 1.1em;
+        }}
+        .service-name {{
+            color: #d2a8ff;
+            font-weight: bold;
+        }}
+        .severity-badge {{
             padding: 3px 10px;
             border-radius: 12px;
-            font-size: 11px;
+            font-size: 0.8em;
             font-weight: bold;
-            text-transform: uppercase;
         }}
-        .badge-critical {{ background: #7f1d1d; color: #fca5a5; }}
-        .badge-high {{ background: #7c2d12; color: #fdba74; }}
-        .badge-medium {{ background: #713f12; color: #fde047; }}
-        .badge-low {{ background: #14532d; color: #86efac; }}
-        .vuln-item {{
-            background: #0f172a;
+        .badge-critique {{ background: #3d1a1a; color: #f85149; border: 1px solid #f85149; }}
+        .badge-elevee {{ background: #3d2e00; color: #d29922; border: 1px solid #d29922; }}
+        .badge-moyenne {{ background: #1a2d3d; color: #58a6ff; border: 1px solid #58a6ff; }}
+        .badge-faible {{ background: #1a3d1a; color: #3fb950; border: 1px solid #3fb950; }}
+        .vuln-card {{
+            background: #0d1117;
+            padding: 12px;
             border-radius: 6px;
-            padding: 15px;
-            margin-bottom: 10px;
-            border-left: 4px solid;
+            margin-top: 8px;
+            border-left: 3px solid;
         }}
-        .vuln-item h4 {{
+        .vuln-critique {{ border-left-color: #f85149; }}
+        .vuln-elevee {{ border-left-color: #d29922; }}
+        .vuln-moyenne {{ border-left-color: #58a6ff; }}
+        .vuln-faible {{ border-left-color: #3fb950; }}
+        .vuln-cve {{
+            color: #79c0ff;
+            font-weight: bold;
             margin-bottom: 5px;
         }}
-        .vuln-item .description {{
-            color: #94a3b8;
-            font-size: 13px;
+        .vuln-desc {{
+            color: #c9d1d9;
             margin-bottom: 8px;
         }}
-        .vuln-item .recommendation {{
-            color: #22c55e;
-            font-size: 13px;
+        .vuln-reco {{
+            color: #3fb950;
+            font-size: 0.9em;
         }}
-        .footer {{
+        .banner {{
+            color: #8b949e;
+            font-style: italic;
+            font-size: 0.9em;
+            margin-top: 5px;
+        }}
+        footer {{
             text-align: center;
-            color: #64748b;
-            font-size: 12px;
             padding: 20px;
+            color: #484f58;
+            font-size: 0.85em;
+            margin-top: 30px;
+            border-top: 1px solid #21262d;
+        }}
+        .warning-box {{
+            background: #3d2e00;
+            border: 1px solid #d29922;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+            color: #d29922;
+        }}
+        .no-vuln {{
+            color: #3fb950;
+            padding: 10px;
+            font-style: italic;
         }}
     </style>
 </head>
 <body>
     <div class="container">
-        <div class="header">
-            <h1>🔍 Rapport NetVuln Scanner</h1>
-            <div class="subtitle">
-                Cible : <strong>{target}</strong> | 
-                Date : <strong>{scan_date.strftime('%d/%m/%Y %H:%M:%S')}</strong>
+        <header>
+            <h1>Rapport NetVuln Scanner</h1>
+            <p>Date du scan : {date_str}</p>
+            <p>Reseau scanne : {resultats.get('reseau', 'Non specifie')}</p>
+            <p>Auteur : Jamein N. Dietrich A.</p>
+        </header>
+
+        <div class="warning-box">
+            <strong>AVERTISSEMENT :</strong> Ce rapport a ete genere dans un cadre educatif.
+            L'utilisation de cet outil sur des reseaux sans autorisation est illegale.
+        </div>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <h3>Hotes detectes</h3>
+                <div class="number info">{len(resultats.get('hotes', []))}</div>
+            </div>
+            <div class="stat-card">
+                <h3>Vulnerabilites totales</h3>
+                <div class="number info">{total_vulns}</div>
+            </div>
+            <div class="stat-card">
+                <h3>Critique</h3>
+                <div class="number critique">{stats.get('CRITIQUE', 0)}</div>
+            </div>
+            <div class="stat-card">
+                <h3>Elevee</h3>
+                <div class="number elevee">{stats.get('ELEVEE', 0)}</div>
+            </div>
+            <div class="stat-card">
+                <h3>Moyenne</h3>
+                <div class="number moyenne">{stats.get('MOYENNE', 0)}</div>
+            </div>
+            <div class="stat-card">
+                <h3>Faible</h3>
+                <div class="number faible">{stats.get('FAIBLE', 0)}</div>
             </div>
         </div>
-        
-        <div class="summary-grid">
-            <div class="summary-card">
-                <div class="number" style="color: #38bdf8;">{open_ports}</div>
-                <div class="label">Ports Ouverts</div>
-            </div>
-            <div class="summary-card">
-                <div class="number" style="color: #ef4444;">{vuln_count}</div>
-                <div class="label">Vulnérabilités</div>
-            </div>
-            <div class="summary-card">
-                <div class="number" style="color: #ef4444;">{severity_stats['Critical']}</div>
-                <div class="label">Critiques</div>
-            </div>
-            <div class="summary-card">
-                <div class="number" style="color: #f97316;">{severity_stats['High']}</div>
-                <div class="label">Élevées</div>
-            </div>
-            <div class="summary-card">
-                <div class="number" style="color: #eab308;">{severity_stats['Medium']}</div>
-                <div class="label">Moyennes</div>
-            </div>
-        </div>
-        
-        <!-- Table des ports ouverts -->
-        <div class="section">
-            <h2>📡 Ports Ouverts</h2>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Port</th>
-                        <th>Service</th>
-                        <th>Version</th>
-                        <th>État</th>
-                    </tr>
-                </thead>
-                <tbody>
 """
-    
-    # Remplissage de la table des ports
-    for port in sorted(scan_results.keys()):
-        info = scan_results[port]
-        version = info.get('version', '—')
-        if not version:
-            version = '—'
-        service = info.get('service', 'unknown')
-        html += f"""                    <tr>
-                        <td>{port}/tcp</td>
-                        <td>{service}</td>
-                        <td style="color: #94a3b8; font-size: 12px;">{version[:60]}</td>
-                        <td><span class="badge badge-low">Open</span></td>
-                    </tr>
+
+    # Section pour chaque hote
+    for hote in resultats.get("hotes", []):
+        html += f"""
+        <div class="host-section">
+            <div class="host-header">
+                <h2>Hote : {hote.get('ip', 'Inconnu')}</h2>
+                <p>Statut : {'Actif' if hote.get('actif') else 'Inactif'} |
+                   Ports ouverts : {len(hote.get('ports', []))}</p>
+            </div>
 """
-    
-    html += """                </tbody>
-            </table>
-        </div>
+        if not hote.get("ports", []):
+            html += """            <div class="no-vuln">Aucun port ouvert detecte.</div>
 """
-    
-    # Section vulnérabilités
-    if vulnerabilities:
-        html += """        <div class="section">
-            <h2>🛡️ Vulnérabilités Détectées</h2>
-"""
-        for vuln in vulnerabilities:
-            severity = vuln.get('severity', 'Low').lower()
-            badge_class = f"badge-{severity}"
-            html += f"""            <div class="vuln-item {severity}">
-                <h4>
-                    <span class="badge {badge_class}">{vuln.get('severity', 'Low')}</span>
-                    {vuln.get('cve_id', 'N/A')} — {vuln.get('title', 'Pas de titre')}
-                </h4>
-                <div class="description">
-                    <strong>Port :</strong> {vuln.get('port', 'N/A')} | 
-                    <strong>Service :</strong> {vuln.get('service', 'N/A')}<br>
-                    {vuln.get('description', '')}
+        for port_info in hote.get("ports", []):
+            port = port_info.get("port", "?")
+            service = port_info.get("service", "Inconnu")
+            banner = port_info.get("banner", "")
+            vulns = port_info.get("vulnerabilites", [])
+
+            html += f"""
+            <div class="port-item">
+                <div class="port-info">
+                    <span class="port-number">Port {port}</span>
+                    <span class="service-name">{service}</span>
                 </div>
-                <div class="recommendation">
-                    ✅ <strong>Recommandation :</strong> {vuln.get('recommendation', 'Consulter l\'avis CVE officiel.')}
-                </div>
-            </div>
 """
+            if banner:
+                html += f"""                <div class="banner">Banniere : {banner}</div>
+"""
+
+            if not vulns:
+                html += """                <div class="no-vuln">Aucune vulnerabilite connue dans la base.</div>
+"""
+            for vuln in vulns:
+                severity = vuln.get("severity", "FAIBLE")
+                badge_class = severity.lower()
+                html += f"""
+                <div class="vuln-card vuln-{badge_class}">
+                    <div class="vuln-cve">{vuln.get('cve', 'N/A')} - {vuln.get('service', '')}</div>
+                    <div class="vuln-desc">{vuln.get('description', '')}</div>
+                    <span class="severity-badge badge-{badge_class}">{severity}</span>
+                    <div class="vuln-reco">Recommandation : {vuln.get('recommendation', 'Aucune')}</div>
+                </div>
+"""
+            html += """            </div>
+"""
+
         html += """        </div>
 """
-    
-    # Pied de page
+
     html += f"""
-        <div class="footer">
-            Rapport généré par NetVuln Scanner v1.0 | {scan_date.strftime('%d/%m/%Y %H:%M:%S')}<br>
-            <em>Ce rapport est généré à des fins éducatives uniquement.</em>
-        </div>
+        <footer>
+            <p>NetVuln Scanner - Rapport genere le {date_str}</p>
+            <p>Auteur : Jamein N. Dietrich A. | Projet educatif en cyberscurite</p>
+            <p>L'utilisation non autorisee de cet outil est strictement interdite.</p>
+        </footer>
     </div>
 </body>
 </html>
 """
-    
-    # Écriture du fichier
-    with open(output_file, 'w', encoding='utf-8') as f:
+
+    with open(fichier_sortie, "w", encoding="utf-8") as f:
         f.write(html)
-    
-    print(f"\n[✓] Rapport HTML généré : {output_file}")
 
-
-# ============================================================
-# TEST
-# ============================================================
-if __name__ == '__main__':
-    # Test avec des données simulées
-    test_results = {
-        22: {'port': 22, 'state': 'open', 'service': 'SSH', 'banner': 'OpenSSH_8.9', 'version': 'OpenSSH_8.9'},
-        80: {'port': 80, 'state': 'open', 'service': 'HTTP', 'banner': 'Apache/2.4.49', 'version': 'Apache/2.4.49'},
-        445: {'port': 445, 'state': 'open', 'service': 'SMB', 'banner': '', 'version': ''},
-        3306: {'port': 3306, 'state': 'open', 'service': 'MySQL', 'banner': 'MySQL 8.0.32', 'version': 'MySQL 8.0.32'},
-    }
-    
-    test_vulns = [
-        {
-            'cve_id': 'CVE-2021-41773',
-            'title': 'Apache Path Traversal',
-            'severity': 'Critical',
-            'port': 80,
-            'service': 'HTTP',
-            'description': 'Traversal de chemin critique.',
-            'recommendation': 'Mise à jour Apache 2.4.51+.'
-        },
-        {
-            'cve_id': 'CVE-2017-0144',
-            'title': 'EternalBlue SMB RCE',
-            'severity': 'Critical',
-            'port': 445,
-            'service': 'SMB',
-            'description': 'Exécution de code à distance via SMBv1.',
-            'recommendation': 'Désactiver SMBv1.'
-        }
-    ]
-    
-    generate_html_report('192.168.1.1', test_results, test_vulns, 'test_report.html')
+    return fichier_sortie
